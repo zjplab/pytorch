@@ -206,9 +206,35 @@ Value* TracingState::getOutput(const IValue& iv, size_t i) {
         fmap(tuple, [&](const IValue& ival) { return getOutput(ival, i); }));
     graph->insertNode(tuple_node);
     return tuple_node->output();
+  } else if (iv.isGenericDict()) {
+    std::cout<<"herel??" << std::endl;
+    auto dict = iv.toGenericDict();
+    // TORCH_CHECK()
+    TypePtr key_type = dict.keyType();
+    TypePtr value_type = dict.valueType();
+
+    if (!(key_type->expect<StringType>() || key_type->expect<TensorType>())
+        || !value_type->expect<TensorType>()) {
+       std::ostringstream os;
+       os << "output " << i << " (" << dict << ") of traced region "
+       << "cannot be understood by the tracer, only dict[str, Tensor] "
+       << "or dict[Tensor, Tensor] can be a dictionary output of a traced function";
+       throw std::runtime_error(os.str());
+    }
+    const auto order = iterationOrder(dict);
+    std::vector<Value*> keys;
+    std::vector<Value*> values;
+    for (const auto &pair : order) {
+      keys.emplace_back(getOutput(pair.first, i));
+      values.emplace_back(getOutput(pair.second, i));
+    }
+    std::cout<<" here?" << std::endl;
+    auto dict_node = graph->createDict(key_type, value_type, keys, values);
+    graph->insertNode(dict_node);
+    return dict_node->output();
   } else {
     AT_ERROR(
-        "Only tensors or tuples of tensors can be output from traced functions");
+        "Only tensors, tuples of tensors, or dictionary of tensors can be output from traced functions");
   }
 }
 

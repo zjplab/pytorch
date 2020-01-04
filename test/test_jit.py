@@ -3356,6 +3356,18 @@ graph(%Ra, %Rb):
         model = Bar()
         self.checkTrace(model, x)
 
+    def test_trace_dict_output(self):
+
+        class Foo(torch.nn.Module):
+            def forward(self, a, b):
+                return {'a': a, 'b': b}
+
+        x = (torch.rand(3), torch.rand(3))
+        model = Foo()
+        traced_model = torch.jit.trace(model, x)
+        print(traced_model.graph)
+        # self.checkTrace(model, x)
+
     def test_trace_variable_instantiation(self):
         def random_foo(x):
             return Variable(Variable(x) + 1.0)
