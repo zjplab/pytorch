@@ -183,6 +183,11 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::runEngineAndAccumulateGradients(
     const ContextPtr& autogradContext,
     const std::shared_ptr<Node>& graphRoot,
     const edge_list& outputEdges) {
+  // Cleanup previous state for outstanding RPCs. Outstanding RPCs could be
+  // lingering if we're running backward multiple times and some of the
+  // passes ran into errors.
+  autogradContext->clearOutstandingRpcs();
+
   auto futureGrads = engine_.execute_with_graph_task(
       autogradContext->retrieveGraphTask(), graphRoot);
 
@@ -201,9 +206,23 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::runEngineAndAccumulateGradients(
           return;
         }
 
-        // Accumulate all the gradients in the context.
         TORCH_INTERNAL_ASSERT(grads.size() == outputEdges.size());
+
+        // Accumulate all the gradients in the context.
         for (size_t i = 0; i < grads.size(); i++) {
+          // Compute the number of references held to the same grad tensor that
+          // have already been processed. This ensures that if have multiple
+          // references to the same grad tensor in our grads list, all but one
+          // tensor would be cloned when we accumulate grad. This avoids a
+          // clone for the last reference of the grad in our grads list.
+          // See use_count check in AccumulateGrad::accumulateGradAndCallHooks.
+          size_t num_expected_refs = 1;
+          if (i != 0) {
+            for (int64_t j = i - 1; j >= 0; j--) {
+              num_expected_refs += (grads[j].is_same(grads[i]));
+            }
+          }
+
           // It is possible that the grad is not defined since a separate
           // invocation of the autograd engine on the same node might actually
           // compute this gradient. Also accumulate grads only for
@@ -213,7 +232,8 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::runEngineAndAccumulateGradients(
             auto& variable = std::static_pointer_cast<AccumulateGrad>(
                                  outputEdges[i].function)
                                  ->variable;
-            autogradContext->accumulateGrad(variable, grads[i]);
+            autogradContext->accumulateGrad(
+                variable, grads[i], num_expected_refs);
           }
         }
 
@@ -340,6 +360,9 @@ void DistEngine::execute(const variable_list& roots, bool retainGraph) {
 void DistEngine::cleanupBackwardPass(const ContextPtr& autogradContext) {
   // Reset the graph task once we're done with all processing.
   autogradContext->resetGraphTask();
+
+  // Clear any outstanding rpcs.
+  autogradContext->clearOutstandingRpcs();
 
   // Clear the context id once we're done with the autograd engine
   // processing.

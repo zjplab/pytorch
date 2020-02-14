@@ -144,6 +144,8 @@ def _run_trainer(rref_t1, t2, ps, rank_diff):
 
 
 class SimulateBackwardError(Function):
+    _simulate_error = True
+
     @staticmethod
     def forward(ctx, input):
         return input
@@ -151,7 +153,10 @@ class SimulateBackwardError(Function):
     @staticmethod
     @once_differentiable
     def backward(ctx, input):
-        raise Exception("Simulate error on backward pass")
+        if SimulateBackwardError._simulate_error:
+            raise Exception("Simulate error on backward pass")
+        else:
+            return input
 
 
 class ExecMode(Enum):
@@ -1736,11 +1741,134 @@ class DistAutogradTest(RpcAgentTestFixture):
             loss = rpc.rpc_sync(
                 'worker{}'.format(self._next_rank()),
                 torch.add,
-                args=(t1, t2, self._next_rank())).sum()
+                args=(t1, t2)).sum()
 
             # Run backward in a loop multiple times.
             for i in range(1000):
                 dist_autograd.backward([loss], retain_graph=True)
+
+    @unittest.skipIf(
+        torch.testing._internal.dist_utils.TEST_CONFIG.rpc_backend_name
+        == "PROCESS_GROUP",
+        "Skipping this test temporarily, see https://github.com/pytorch/pytorch/issues/33208",
+    )
+    @dist_init(clean_shutdown=False)
+    def test_multiple_backward_with_errors(self):
+        initialize_pg(self.init_method, self.rank, self.world_size)
+        t1 = torch.rand((3, 3), requires_grad=True)
+        t2 = torch.rand((3, 3), requires_grad=True)
+        with dist_autograd.context() as context_id:
+            loss = rpc.rpc_sync(
+                'worker{}'.format(self._next_rank()),
+                DistAutogradTest._python_udf_with_backward_error,
+                args=(t1, t2)).sum()
+
+            try:
+                # Run backward in a loop multiple times.
+                for i in range(100):
+                    if i < 50:
+                        with self.assertRaisesRegex(RuntimeError, "Simulate error on backward pass"):
+                            dist_autograd.backward([loss], retain_graph=True)
+                    elif i > 50:
+                        # Recovered from error.
+                        dist_autograd.backward([loss], retain_graph=True)
+                    else:
+                        dist.barrier()
+                        SimulateBackwardError._simulate_error = False
+                        dist.barrier()
+            finally:
+                # Sync before resetting flag.
+                dist.barrier()
+
+                # Reset the flag.
+                SimulateBackwardError._simulate_error = True
+
+    @dist_init
+    def test_backward_verify_hooks(self):
+        t1 = torch.ones((3, 3), requires_grad=True)
+        # Double the gradient.
+        t1.register_hook(lambda grad: grad * 2)
+        t2 = torch.ones((3, 3), requires_grad=True)
+        local_grads = None
+        for exec_mode in [ExecMode.LOCAL, ExecMode.RPC_SYNC, ExecMode.REMOTE]:
+            with dist_autograd.context() as context_id:
+                ret = self._exec_func(exec_mode, torch.matmul, t1, t2)
+                loss = ret.sum()
+                ret = self._verify_backwards(
+                    exec_mode, [loss], context_id, local_grads, t1, t2
+                )
+                local_grads = ret if ret else local_grads
+
+    @dist_init
+    def test_no_grad_copy(self):
+        '''
+        Similar to test in test_autograd.py.
+        '''
+        # create autograd function that saves grad pointer as class static
+        class MyFunc(Function):
+            static_grad_ptr = None
+
+            @staticmethod
+            def forward(ctx, inp1, inp2):
+                return inp1 + inp2
+
+            @staticmethod
+            def backward(ctx, grad):
+                MyFunc.static_grad_ptr = grad.data_ptr()
+                return grad, grad
+
+        class MyFuncSingleGrad(Function):
+            static_grad_ptr = None
+
+            @staticmethod
+            def forward(ctx, inp):
+                return inp
+
+            @staticmethod
+            def backward(ctx, grad):
+                MyFuncSingleGrad.static_grad_ptr = grad.data_ptr()
+                return grad
+
+        class NonContGradFunc(Function):
+            @staticmethod
+            def forward(ctx, inp1):
+                ctx.size = inp1.size()
+                return torch.tensor([1.])
+
+            @staticmethod
+            def backward(ctx, grad):
+                return torch.ones(1).expand(ctx.size)
+
+        a = torch.randn(5, 6, requires_grad=True)
+        b = torch.randn(5, 6, requires_grad=True)
+        # non-contiguous grad should be copied
+        with dist_autograd.context() as context_id:
+            dist_autograd.backward([NonContGradFunc.apply(MyFunc.apply(a, b))])
+            grads = dist_autograd.get_gradients(context_id)
+            self.assertFalse(grads[a].data_ptr() == MyFunc.static_grad_ptr)
+            self.assertFalse(grads[b].data_ptr() == MyFunc.static_grad_ptr)
+
+        # test case that should trigger no copy for a
+        with dist_autograd.context() as context_id:
+            dist_autograd.backward([MyFuncSingleGrad.apply(a)[1][0]])
+            grads = dist_autograd.get_gradients(context_id)
+            p_g = MyFuncSingleGrad.static_grad_ptr
+            p_a = grads[a].data_ptr()
+            # Verify there was no clone.
+            self.assertTrue(p_a == p_g)
+
+        # test case that should trigger no copy for one of a,b
+        with dist_autograd.context() as context_id:
+            dist_autograd.backward([MyFunc.apply(a, b)[1][0]])
+            grads = dist_autograd.get_gradients(context_id)
+            p_g = MyFunc.static_grad_ptr
+            p_a = grads[a].data_ptr()
+            p_b = grads[b].data_ptr()
+            # check a,b uses different grad buffer
+            self.assertFalse(p_a == p_b)
+            # check one of them is using the computed buffer
+            self.assertTrue(p_a == p_g or p_b == p_g)
+
 
 @unittest.skipIf(
     not torch._six.PY3,
