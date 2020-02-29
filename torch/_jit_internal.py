@@ -10,7 +10,7 @@ import warnings
 import torch
 from torch._six import builtins
 from torch._utils_internal import get_source_lines_and_file
-from typing import Tuple, List, Dict, Optional, Union, Any  # noqa: F401
+from typing import Tuple, List, Dict, Optional, Union, Any, TypeVar, Generic  # noqa: F401
 
 # Wrapper functions that can call either of 2 functions depending on a boolean
 # argument
@@ -598,16 +598,40 @@ try:
 
     T = TypeVar('T')
 
+    class Future(Generic[T]):
+        __slots__ = ['__args__']
+
+        def __init__(self, types):
+            self.__args__ = types
+
     class RRef(Generic[T]):
         __slots__ = ['__args__']
 
         def __init__(self, types):
             self.__args__ = types
 
+    def is_future(ann):
+        return getattr(ann, "__origin__", None) is Future
+
     def is_rref(ann):
         return getattr(ann, "__origin__", None) is RRef
 
 except ImportError:
+    class FutureInstance(object):
+        __slots__ = ['__args__']
+
+        def __init__(self, types):
+            self.__args__ = types
+
+    class FutureCls(object):
+        def __getitem__(self, types):
+            return FutureInstance(types)
+
+    Future = FutureCls()  # noqa: T484
+
+    def is_future(ann):
+        return isinstance(ann, FutureInstance)
+
     class RRefInstance(object):
         __slots__ = ['__args__']
 
