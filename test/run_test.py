@@ -80,6 +80,7 @@ if PY33:
         'distributed/rpc/test_dist_autograd_spawn',
         'distributed/rpc/test_dist_optimizer_spawn',
         'distributed/rpc/jit/test_dist_autograd_spawn',
+        'distributed/test_dist_accumulate_grad.py',
     ])
 
 # skip < 3.6 b/c fstrings added in 3.6
@@ -88,6 +89,7 @@ if PY36:
         'test_jit_py3',
         'test_determination',
         'distributed/rpc/jit/test_rpc_spawn',
+        'distributed/test_dist_accumulate_grad.py',
     ])
 
 WINDOWS_BLACKLIST = [

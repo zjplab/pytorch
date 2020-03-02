@@ -1,12 +1,15 @@
 #pragma once
 
+#include <functional>
 #include <mutex>
 #include <unordered_set>
+#include <vector>
 
 #include <torch/csrc/autograd/engine.h>
 #include <torch/csrc/autograd/function.h>
 #include <torch/csrc/autograd/functions/basic_ops.h>
 #include <torch/csrc/distributed/autograd/context/context.h>
+#include <torch/csrc/distributed/autograd/functions/dist_accumulate_grad.h>
 
 namespace torch {
 namespace distributed {
@@ -57,6 +60,23 @@ class TORCH_API DistEngine {
   std::unordered_map<std::string, std::string> getDebugInfo() const;
 
  private:
+  // This is used to restore AccumulateGrad nodes in the graph.
+  struct DistAccumulateGradContext {
+    torch::autograd::Node *from = nullptr;
+    std::shared_ptr<DistAccumulateGrad> to = nullptr;
+    int edgeIndex = -1;
+  };
+  struct GraphModificationContext {
+    std::vector<DistAccumulateGradContext> distAccumulateGradCtx;
+  };
+
+  // Replace all AccumulateGrad nodes in the graph by DistAccumulateGrad. The
+  // returned value can be used to restore the graph later.
+  GraphModificationContext replaceAccumulateGradNodes(
+      const ContextPtr& context,
+      std::shared_ptr<torch::autograd::Node> graphRoot);
+  void restoreGraph(GraphModificationContext&& context) const;
+
   // Make sure this is a singleton.
   DistEngine();
   ~DistEngine() = default;
@@ -94,7 +114,8 @@ class TORCH_API DistEngine {
   std::shared_ptr<rpc::FutureMessage> runEngineAndAccumulateGradients(
       const ContextPtr& autogradContext,
       const std::shared_ptr<torch::autograd::Node>& graphRoot,
-      const torch::autograd::edge_list& outputEdges);
+      const torch::autograd::edge_list& outputEdges,
+    std::function<void()> onFinish);
 
   // Run after the backward pass is done to appropriately cleanup structures.
   void cleanupBackwardPass(const ContextPtr& autogradContext);

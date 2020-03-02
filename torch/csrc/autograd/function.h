@@ -190,6 +190,10 @@ struct TORCH_API Node : std::enable_shared_from_this<Node> {
     return next_edges_[index];
   }
 
+  Edge& next_edge(size_t index) noexcept {
+    return next_edges_[index];
+  }
+
   void set_next_edge(size_t index, Edge edge) {
     next_edges_[index] = std::move(edge);
   }
@@ -331,6 +335,11 @@ struct TORCH_API Node : std::enable_shared_from_this<Node> {
   virtual bool passes_state_transparently() {
     return false;
   }
+
+  // Move/copy metadata from 'rhs'.
+  // After this call, 'rhs' can still be reused later, e.g. restoring its
+  // metadata.
+  void move_metadata_from(Node& rhs);
 
   static uint64_t peek_at_next_sequence_nr();
 

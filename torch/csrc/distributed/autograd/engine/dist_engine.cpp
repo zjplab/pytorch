@@ -4,6 +4,7 @@
 #include <torch/csrc/autograd/input_buffer.h>
 #include <torch/csrc/distributed/autograd/context/container.h>
 #include <torch/csrc/distributed/autograd/engine/dist_engine.h>
+#include <torch/csrc/distributed/autograd/functions/dist_accumulate_grad.h>
 
 namespace torch {
 namespace distributed {
@@ -24,6 +25,7 @@ static constexpr char* kEngineCPUQueueSize =
     "local_autograd_engine_cpu_queue_size";
 static constexpr char* kNumAutogradContexts = "num_autograd_contexts";
 
+
 DistEngine::DistEngine()
     : initializedContextIds_(), engine_(Engine::get_default_engine()) {}
 
@@ -31,6 +33,83 @@ DistEngine& DistEngine::getInstance() {
   // Leaky singleton to avoid module destructor race.
   static DistEngine* engine = new DistEngine();
   return *engine;
+}
+
+// NB: this function modifies the autograd graph. More specifically it replaces
+// all AccumulateGrad nodes by DistAccumulateGrad.
+void DistEngine::restoreGraph(GraphModificationContext&& context) const {
+  for (const auto& oneEdge : context.distAccumulateGradCtx) {
+    oneEdge.from->next_edge(oneEdge.edgeIndex).function =
+        oneEdge.to->restoreAccumulateGrad();
+  }
+}
+
+auto DistEngine::replaceAccumulateGradNodes(
+    const ContextPtr& autogradContext,
+    std::shared_ptr<Node> graphRoot) -> GraphModificationContext {
+  TORCH_INTERNAL_ASSERT(graphRoot, "graphRoot is null!");
+
+  GraphModificationContext graphContext;
+
+  std::unordered_set<Node*> seen;
+  std::queue<Node*> queue;
+  queue.push(graphRoot.get());
+  // Add all the send functions to the queue as roots.
+  for (const auto& mapEntry : autogradContext->sendFunctions()) {
+    queue.push(mapEntry.second.get());
+  }
+
+  // If a node is in this map, it should be replaced by its corresponding value
+  // in the graph, i.e. all edges pointing to the key should point to the value.
+  std::unordered_map<Node*, std::shared_ptr<DistAccumulateGrad>>
+      accumulateGradReplacements;
+  while (!queue.empty()) {
+    auto fn = queue.front();
+    queue.pop();
+    for (size_t index = 0; index < fn->num_outputs(); ++index) {
+      const auto& edge = fn->next_edge(index);
+      auto nextFn = edge.function.get();
+      if (!nextFn) {
+        // The edge list has a nullptr.
+        continue;
+      }
+      if (auto accumulateGradFn = dynamic_cast<AccumulateGrad*>(nextFn)) {
+        TORCH_INTERNAL_ASSERT(
+            accumulateGradFn->num_outputs() == 0,
+            "AccumulateGrad shuoldn't have any output.");
+
+        // Replace an AccumulateGrad node by DistAccumulateGrad,
+        // because the former accumulates grads to the variable's '.grad'
+        // without considering the context id. That may cause data race
+        // on the '.grad', since multiple context ids may have grads for
+        // the same '.grad'.
+        // See https://pytorch.org/docs/master/notes/distributed_autograd.html
+        auto itr = accumulateGradReplacements.find(nextFn);
+        if (itr == accumulateGradReplacements.end()) {
+          auto distAccumulateGradFn = std::make_shared<DistAccumulateGrad>(
+              std::dynamic_pointer_cast<AccumulateGrad>(edge.function),
+              autogradContext);
+          itr = accumulateGradReplacements
+                    .emplace(nextFn, std::move(distAccumulateGradFn))
+                    .first;
+        }
+        auto distAccumulateGradFn = itr->second;
+        fn->next_edge(index).function = distAccumulateGradFn;
+        graphContext.distAccumulateGradCtx.push_back(DistAccumulateGradContext{
+            .from = fn,
+            .to = distAccumulateGradFn,
+            .edgeIndex = index,
+        });
+        continue;
+      }
+
+      if (/* wasInserted = */ seen.insert(nextFn).second) {
+        queue.push(nextFn);
+      }
+    }
+  }
+
+  return graphContext;
 }
 
 void DistEngine::validateRootsAndRetrieveEdges(
@@ -83,8 +162,7 @@ void DistEngine::computeDependencies(
   // Run BFS to traverse the graph locally. The roots of the graph are
   // GraphRoot and all send functions for this autograd context.
   std::unordered_set<Node*> seen;
-  std::queue<Node*> queue;
-  queue.push(static_cast<Node*>(graphRoot.get()));
+  std::vector<Node*> queue = {graphRoot.get()};
 
   auto sendFunctions = autogradContext->sendFunctions();
 
@@ -93,88 +171,25 @@ void DistEngine::computeDependencies(
     // Increment 'outstanding_tasks_' for GraphTask for each send_function
     // since we want the local autograd engine to wait for all of them.
     graphTask->outstanding_tasks_++;
-    queue.push(mapEntry.second.get());
+    queue.push_back(mapEntry.second.get());
   }
 
-  edge_list recvBackwardEdges;
   // Traverse the graph.
   auto& dependencies = graphTask->dependencies_;
   while (!queue.empty()) {
-    auto fn = queue.front();
-    queue.pop();
-
+    auto fn = queue.back();
+    queue.pop_back();
     for (const auto& edge : fn->next_edges()) {
-      if (auto nextFn = edge.function.get()) {
-        dependencies[nextFn] += 1;
-        const bool wasInserted = seen.insert(nextFn).second;
-        if (wasInserted) {
-          // Seeing this function for the first time.
-          queue.push(nextFn);
-
-          if (nextFn->next_edges().empty()) {
-            TORCH_INTERNAL_ASSERT(
-                dynamic_cast<AccumulateGrad*>(nextFn) ||
-                dynamic_cast<RecvRpcBackward*>(nextFn));
-            // We have found a leaf node which should be either AccumulateGrad
-            // or RecvRpcBackward. Record the function
-            // to ensure we don't execute it and instead accumulate the grads on
-            // the autograd context. These functions would be passed in as the
-            // 'outputs' parameter of the vanilla autograd engine.
-
-            // We don't accumulate any grads in the context for RecvRpcBackward.
-            // RecvRpcBackward is added as an output edge to indicate it is a
-            // leaf node and this helps in properly computing dependencies for
-            // the local autograd graph. Putting RecvRpcBackward in
-            // 'outputEdges' means that this function needs to be executed
-            // (inline with our assumption for FAST mode that all send/recv
-            // functions are valid in the backward pass), and as a result all of
-            //  its ancestors need to be executed as well.
-            if (dynamic_cast<RecvRpcBackward*>(nextFn)) {
-              recvBackwardEdges.emplace_back(edge);
-            }
-            outputEdges.emplace_back(edge);
-          }
-        }
+      if (auto next_ptr = edge.function.get()) {
+        dependencies[next_ptr] += 1;
+        const bool was_inserted = seen.insert(next_ptr).second;
+        if (was_inserted) queue.push_back(next_ptr);
       }
     }
   }
 
-  // Now lets compute which functions need to be executed. The algorithm is as
-  // follows:
-  // 1. Create a dummy GraphRoot which points to all 'send' functions for this
-  //    context and the original graphRoot. Run 'init_to_execute' with the
-  //    outputEdges and the dummy GraphRoot. This ensures we mark
-  //    appropriate functions as needed if they are reachable only from a
-  //    specific 'send' function locally and not necessarily from the provided
-  //    roots.
-  // 2. For all edges in 'outputEdges' which point to 'RecvRpcBackward', mark
-  //    those functions as needed for execution. The reason for this is that
-  //    'init_to_execute', will mark these as not needed. But 'RecvRpcBackward'
-  //    is unique in the sense that we use it as a leaf node in graph to compute
-  //    needed execution accurately, but unlike AccumulateGrad, we do need to
-  //    execute this function.
-  if (!outputEdges.empty()) {
-    // Compute 'needed execution' starting from all 'send' functions and the
-    // original graphRoot.
-    edge_list edges;
-    // Create some dummy edges (input_nr not important for init_to_execute).
-    for (const auto& mapEntry : sendFunctions) {
-      edges.emplace_back(mapEntry.second, 0);
-    }
-
-    // Add the original graphRoot as an edge.
-    edges.emplace_back(graphRoot, 0);
-
-    // Create a dummy GraphRoot and run init_to_execute with it.
-    GraphRoot dummyRoot(edges, {});
-    graphTask->init_to_execute(dummyRoot, outputEdges);
-
-    // Mark all 'RecvRPCBackward' as needing execution.
-    for (const auto& recvBackwardEdge : recvBackwardEdges) {
-      graphTask->exec_info_[recvBackwardEdge.function.get()].needed_ = true;
-    }
-  }
-
+  TORCH_INTERNAL_ASSERT(
+      graphTask->exec_info_.empty(), "Should run the whole graph!");
   // Let autograd context take ownership of the GraphTask.
   autogradContext->setGraphTask(std::move(graphTask));
 }
@@ -182,7 +197,8 @@ void DistEngine::computeDependencies(
 std::shared_ptr<rpc::FutureMessage> DistEngine::runEngineAndAccumulateGradients(
     const ContextPtr& autogradContext,
     const std::shared_ptr<Node>& graphRoot,
-    const edge_list& outputEdges) {
+    const edge_list& outputEdges,
+    std::function<void()> onFinish) {
   // Cleanup previous state for outstanding RPCs. Outstanding RPCs could be
   // lingering if we're running backward multiple times and some of the
   // passes ran into errors.
@@ -197,9 +213,14 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::runEngineAndAccumulateGradients(
   auto accumulateGradFuture = std::make_shared<rpc::FutureMessage>();
 
   futureGrads->addCallback(
-      [autogradContext, outputEdges, accumulateGradFuture](
+      [autogradContext,
+       outputEdges,
+       accumulateGradFuture,
+       onFinish = std::move(onFinish)](
           const variable_list& grads,
           const c10::optional<torch::utils::FutureError>& error) {
+        onFinish();
+
         if (error) {
           // Don't accumulate gradients if we receive an error.
           // We must add the node information here since DistEngine::execute
@@ -215,23 +236,6 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::runEngineAndAccumulateGradients(
         }
 
         TORCH_INTERNAL_ASSERT(grads.size() == outputEdges.size());
-
-        // Accumulate all the gradients in the context.
-        for (size_t i = 0; i < grads.size(); i++) {
-          // It is possible that the grad is not defined since a separate
-          // invocation of the autograd engine on the same node might actually
-          // compute this gradient. Also accumulate grads only for
-          // AccumulateGrad function.
-          if (grads[i].defined() &&
-              dynamic_cast<AccumulateGrad*>(outputEdges[i].function.get())) {
-            auto& variable = std::static_pointer_cast<AccumulateGrad>(
-                                 outputEdges[i].function)
-                                 ->variable;
-            autogradContext->accumulateGrad(
-                variable, grads[i], 1 /* num_expected_refs */);
-          }
-        }
-
         accumulateGradFuture->markCompleted(rpc::Message());
       });
 
@@ -248,6 +252,8 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::executeSendFunctionAsync(
     edge_list outputEdges;
     // Pass in a dummy graphRoot since all send functions are the roots.
     auto dummyRoot = std::make_shared<GraphRoot>(edge_list(), variable_list());
+    auto graphContext =
+        replaceAccumulateGradNodes(autogradContext, dummyRoot);
     computeDependencies(
         autogradContext, {}, {}, dummyRoot, outputEdges, retainGraph);
 
@@ -262,7 +268,12 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::executeSendFunctionAsync(
 
     // Run the autograd engine.
     auto accumulateGradFuture = runEngineAndAccumulateGradients(
-        autogradContext, dummyRoot, outputEdges);
+        autogradContext,
+        dummyRoot,
+        outputEdges,
+        [this, graphContext = std::move(graphContext)]() mutable {
+          this->restoreGraph(std::move(graphContext));
+        });
 
     // Build the 'uber' future that waits for everything.
     auto callbackFuture = std::make_shared<rpc::FutureMessage>();
@@ -270,7 +281,7 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::executeSendFunctionAsync(
     accumulateGradFuture->addCallback(
         [autogradContext, callbackFuture](
             const rpc::Message& message /* unused */,
-            const c10::optional<torch::utils::FutureError>& error) {
+            const c10::optional<torch::utils::FutureError>& error) mutable {
           if (error) {
             // Perform cleanup at the end of the backward pass (before we mark
             // the future as completed).
@@ -329,6 +340,7 @@ void DistEngine::execute(
   std::shared_ptr<Node> graphRoot =
       std::make_shared<GraphRoot>(rootEdges, grads);
   edge_list outputEdges;
+  GraphModificationContext graphContext;
   // Compute dependencies locally, starting from all roots and all 'send'
   // functions.
   {
@@ -338,6 +350,7 @@ void DistEngine::execute(
         initializedContextIds_.find(autogradContext->contextId()) ==
         initializedContextIds_.end());
 
+    graphContext = replaceAccumulateGradNodes(autogradContext, graphRoot);
     computeDependencies(
         autogradContext, rootEdges, grads, graphRoot, outputEdges, retainGraph);
 
@@ -349,7 +362,13 @@ void DistEngine::execute(
 
   // This needs to be blocking and as a result we wait for the future to
   // complete.
-  runEngineAndAccumulateGradients(autogradContext, graphRoot, outputEdges)
+  runEngineAndAccumulateGradients(
+      autogradContext,
+      graphRoot,
+      outputEdges,
+      [this, graphContext = std::move(graphContext)]() mutable {
+        this->restoreGraph(std::move(graphContext));
+      })
       ->wait();
 
   // Wait for all of the outstanding rpcs to complete.
