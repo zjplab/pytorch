@@ -185,6 +185,7 @@ option(USE_SNPE "Use Qualcomm's SNPE library" OFF)
 option(USE_SYSTEM_EIGEN_INSTALL
     "Use system Eigen instead of the one under third_party" OFF)
 option(USE_TENSORRT "Using Nvidia TensorRT library" OFF)
+option(USE_XNNPACK "Use XNNPACK" ON)
 option(USE_ZMQ "Use ZMQ" OFF)
 option(USE_ZSTD "Use ZSTD" OFF)
 cmake_dependent_option(
@@ -202,6 +203,7 @@ cmake_dependent_option(
     USE_GLOO "Use Gloo. Only available if USE_DISTRIBUTED is on." ON
     "USE_DISTRIBUTED" OFF)
 option(USE_TBB "Use TBB" OFF)
+option(ONNX_ML "Enable traditional ONNX ML API." ON)
 
 # Used when building Caffe2 through setup.py
 option(BUILDING_WITH_TORCH_LIBS "Tell cmake if Caffe2 is being built alongside torch libs" ON)
@@ -270,8 +272,16 @@ if (MSVC)
     endif()
 
     # /bigobj increases number of sections in .obj file, which is needed to link
-    # against libaries in Python 2.7 under Windows
-    set(${flag_var} "${${flag_var}} /MP /bigobj")
+    # against libraries in Python 2.7 under Windows
+    # For Visual Studio generators, if /MP is not added, then we may need 
+    # to add /MP to the flags.
+    # For other generators like ninja, we don't need to add /MP because it is
+    # already handled by the generator itself.
+    if(CMAKE_GENERATOR MATCHES "Visual Studio" AND NOT ${flag_var} MATCHES "/MP")
+      set(${flag_var} "${${flag_var}} /MP /bigobj")
+    else()
+      set(${flag_var} "${${flag_var}} /bigobj")
+    endif()
   endforeach(flag_var)
 
   foreach(flag_var
@@ -293,10 +303,17 @@ if (MSVC)
   list(APPEND CUDA_NVCC_FLAGS "-Xcompiler /w -w")
 endif(MSVC)
 
+IF(NOT MSVC)
+  SET(CUDA_NVCC_FLAGS_DEBUG "${CUDA_NVCC_FLAGS_DEBUG} -g -G --source-in-ptx")
+  SET(CUDA_NVCC_FLAGS_RELWITHDEBINFO "${CUDA_NVCC_FLAGS_RELWITHDEBINFO} -g -lineinfo --source-in-ptx")
+ENDIF(NOT MSVC)
+
 # Set INTERN_BUILD_MOBILE for all mobile builds. Components that are not
 # applicable to mobile are disabled by this variable.
 if (ANDROID OR IOS)
   set(INTERN_BUILD_MOBILE ON)
+  # Disable developing mobile interpreter for actual mobile build. Enable it elsewhere to capture build error.
+  set(INTERN_DISABLE_MOBILE_INTERP ON)
 endif()
 
 # Setting `PYTORCH_BUILD_MOBILE` environment variable can force it to do mobile
@@ -328,7 +345,6 @@ if (INTERN_BUILD_MOBILE AND NOT BUILD_CAFFE2_MOBILE)
   set(FEATURE_TORCH_MOBILE ON)
   set(NO_API ON)
   set(USE_FBGEMM OFF)
-  set(USE_PYTORCH_QNNPACK ON)
   set(USE_QNNPACK OFF)
   set(INTERN_DISABLE_ONNX ON)
   set(INTERN_DISABLE_AUTOGRAD ON)
@@ -399,6 +415,10 @@ endif()
 
 if(USE_PYTORCH_QNNPACK)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_PYTORCH_QNNPACK")
+endif()
+
+if(USE_XNNPACK)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_XNNPACK")
 endif()
 
 # ---[ Whitelist file if whitelist is specified
@@ -481,6 +501,10 @@ if(NOT MSVC)
   set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_STATIC_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer -O0")
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-math-errno")
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-trapping-math")
+  check_cxx_compiler_flag("-Werror=format" HAS_WERROR_FORMAT)
+  if (HAS_WERROR_FORMAT)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror=format")
+  endif()
 endif()
 
 if (USE_ASAN)
