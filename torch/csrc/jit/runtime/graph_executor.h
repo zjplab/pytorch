@@ -44,6 +44,7 @@ struct TORCH_API GraphExecutor {
   GraphExecutor() = default;
   GraphExecutor(std::shared_ptr<Graph> graph);
   void run(Stack& inputs);
+
   // `remaining_bailout_depth` stands for the maximum number of profiled and
   // specialized recompilations allowed for the current `GraphExecutor`. if
   // remaining_bailout_depth is equal to 0, `GraphExecutor` won't perform any
@@ -57,6 +58,9 @@ struct TORCH_API GraphExecutor {
   explicit operator bool() const {
     return pImpl != nullptr;
   }
+
+  c10::intrusive_ptr<Future> runAsync(Stack& stack);
+
   std::shared_ptr<Graph> graph() const;
   GraphExecutorState getDebugState();
 
