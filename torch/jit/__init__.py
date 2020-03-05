@@ -535,7 +535,8 @@ def _check_trace(check_inputs, func, traced_func, check_tolerance,
         if is_trace_module:
             copied_dict = {}
             for name, data in inputs.items():
-                copied_dict[name] = _clone_inputs(data)
+                # copied_dict[name] = _clone_inputs(data)
+                copied_dict[name] = data
             check_mod = torch.jit.trace_module(
                 func.__self__ if hasattr(func, '__self__') else func,
                 copied_dict,
@@ -551,7 +552,8 @@ def _check_trace(check_inputs, func, traced_func, check_tolerance,
         else:
             check_mod = torch.jit.trace(
                 func,
-                _clone_inputs(inputs),
+                inputs,
+                # _clone_inputs(inputs),
                 check_trace=False,
                 _force_outplace=force_outplace,
                 _module_class=_module_class,
