@@ -664,7 +664,8 @@ std::shared_ptr<SugaredValue> toSugaredValue(
     }
   }
 
-  if (py::module::import("torch.jit").attr("_is_exception")) {
+  if (py::cast<bool>(
+          py::module::import("torch.jit").attr("_is_exception")(obj))) {
     return std::make_shared<PythonExceptionValue>(obj);
   }
 

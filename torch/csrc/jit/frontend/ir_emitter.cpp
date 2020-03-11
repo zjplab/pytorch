@@ -475,6 +475,7 @@ struct Environment {
           {"chr", std::make_shared<BuiltinFunction>(aten::chr, at::nullopt)},
           {"bin", std::make_shared<BuiltinFunction>(aten::bin, at::nullopt)},
           {"AssertionError", std::make_shared<ExceptionValue>()},
+          {"RuntimeError", std::make_shared<ExceptionValue>()},
           {"range", SpecialFormValue::create(prim::range)},
           {"zip", SpecialFormValue::create(prim::zip)},
           {"enumerate", SpecialFormValue::create(prim::enumerate)},
@@ -1727,20 +1728,25 @@ struct to_ir {
   // We ignore the expression following raise
   void emitRaise(const Raise& raise) {
     auto sv = emitSugaredExpr(raise.expr(), 1);
+    Value* value = nullptr;
     auto exception_sv = std::dynamic_pointer_cast<ExceptionMessageValue>(sv);
     if (exception_sv == nullptr) {
-      // auto simple_sv = std::dynamic_pointer_cast<SimpleValue>(sv);
-      // if (simple_sv != nullptr) {
-      //   std::cout << *method.graph() << "\n";
-      //   std::cout << "Its a simple\n";
-      // }
-      // The raise was not followed by an exception (i.e. it was something like
-      // `raise "error"` instead of `raise RuntimeError("error")`)
-      throw ErrorReport(raise.range())
-          << "exceptions must derive from BaseException";
+      auto exception_class_sv = std::dynamic_pointer_cast<ExceptionValue>(sv);
+      if (exception_class_sv != nullptr) {
+        // A bare exception was thrown (e.g. `raise NotImplementedError`)
+        value = insertConstant(*graph, "", raise.range());
+      } else {
+        // The raise was not followed by an exception (i.e. it was something like
+        // `raise "error"` instead of `raise RuntimeError("error")`)
+        throw ErrorReport(raise.range())
+            << "exceptions must derive from BaseException";
+      }
     }
 
-    Value* value = exception_sv->getValue();
+    if (value == nullptr) {
+      TORCH_INTERNAL_ASSERT(exception_sv != nullptr);
+      value = exception_sv->getValue();
+    }
 
     // TODO: Fix hack (some things like `ValueError` can take non-string arguments)
     // Since exceptions are still sugared values and don't have an `attr()` defined,

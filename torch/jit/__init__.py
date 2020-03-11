@@ -1095,6 +1095,8 @@ def _is_new_style_class(cls):
 
 
 def _is_exception(obj):
+    if not inspect.isclass(obj):
+        return False
     return issubclass(obj, Exception)
 
 
