@@ -1807,6 +1807,7 @@ def embedding_bag(input, weight, offsets=None, max_norm=None, norm_type=2,
     if input.dim() == 2:
         if offsets is not None:
             type_str = "<unknown>"
+            # TODO: Remove this once script supports type() calls
             if not torch.jit.is_scripting():
                 type_str = str(type(offsets))
             raise ValueError("if input is 2D, then offsets has to be None"
