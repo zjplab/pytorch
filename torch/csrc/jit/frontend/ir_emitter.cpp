@@ -474,6 +474,7 @@ struct Environment {
           {"ord", std::make_shared<BuiltinFunction>(aten::ord, at::nullopt)},
           {"chr", std::make_shared<BuiltinFunction>(aten::chr, at::nullopt)},
           {"bin", std::make_shared<BuiltinFunction>(aten::bin, at::nullopt)},
+          {"AssertionError", std::make_shared<ExceptionValue>()},
           {"range", SpecialFormValue::create(prim::range)},
           {"zip", SpecialFormValue::create(prim::zip)},
           {"enumerate", SpecialFormValue::create(prim::enumerate)},
@@ -995,7 +996,7 @@ struct to_ir {
           emitSugaredExpr(expr, 0);
         } break;
         case TK_RAISE:
-          emitRaise(Raise(stmt).range());
+          emitRaise(Raise(stmt));
           break;
         case TK_ASSERT:
           emitAssert(Assert(stmt));
@@ -1724,10 +1725,31 @@ struct to_ir {
   // raise a
   //
   // We ignore the expression following raise
-  void emitRaise(const SourceRange& loc) {
-    const std::string exception = "Exception";
-    auto string_input = insertConstant(*graph, exception, loc);
-    graph->insert(prim::RaiseException, {string_input}, {}, loc);
+  void emitRaise(const Raise& raise) {
+    auto sv = emitSugaredExpr(raise.expr(), 1);
+    auto exception_sv = std::dynamic_pointer_cast<ExceptionMessageValue>(sv);
+    if (exception_sv == nullptr) {
+      // auto simple_sv = std::dynamic_pointer_cast<SimpleValue>(sv);
+      // if (simple_sv != nullptr) {
+      //   std::cout << *method.graph() << "\n";
+      //   std::cout << "Its a simple\n";
+      // }
+      // The raise was not followed by an exception (i.e. it was something like
+      // `raise "error"` instead of `raise RuntimeError("error")`)
+      throw ErrorReport(raise.range())
+          << "exceptions must derive from BaseException";
+    }
+
+    Value* value = exception_sv->getValue();
+
+    // TODO: Fix hack (some things like `ValueError` can take non-string arguments)
+    // Since exceptions are still sugared values and don't have an `attr()` defined,
+    // this should be ok for now
+    if (!value->type()->isSubtypeOf(StringType::get())) {
+      value = graph->insert(aten::str, {value});
+    }
+
+    graph->insert(prim::RaiseException, {value}, {}, raise.range());
     exit_blocks.insert(environment_stack->block());
   }
 
@@ -1735,8 +1757,15 @@ struct to_ir {
   void emitAssert(const Assert& stmt) {
     CondValue cond_value = emitCondExpr(stmt.test());
     List<Stmt> true_branch = List<Stmt>::create(stmt.range(), {});
-    List<Stmt> false_branch =
-        List<Stmt>::create(stmt.range(), {Raise::create(stmt.range())});
+    auto message = StringLiteral::create(stmt.range(), "AssertionError");
+    auto callee = Var::create(stmt.range(), Ident::create(stmt.range(), "AssertionError"));
+    auto apply = Apply::create(
+        stmt.range(),
+        callee,
+        List<Expr>::create(stmt.range(), {message}),
+        List<Attribute>::create(stmt.range(), {}));
+    List<Stmt> false_branch = List<Stmt>::create(
+        stmt.range(), {Raise::create(stmt.range(), apply)});
     emitIfElseBlocks(stmt.range(), cond_value, true_branch, false_branch);
   }
 

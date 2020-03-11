@@ -652,6 +652,45 @@ struct SimpleSelf : public Self {
  private:
   ClassTypePtr classType_;
 };
+
+
+// This is not a SimpleValue so it can pass through the code paths
+// that expect a SimpleValue as a sugared value
+struct TORCH_API ExceptionMessageValue : public SugaredValue {
+  ExceptionMessageValue(Value* value) : value_(value) {}
+
+  std::string kind() const override {
+    return "exception message";
+  }
+
+  Value* getValue() {
+    return value_;
+  }
+
+  Value* value_;
+};
+
+
+struct TORCH_API ExceptionValue : public SugaredValue {
+  ExceptionValue() : message_("ExceptionValue") {}
+
+  std::string kind() const override {
+    return "exception";
+  }
+
+  std::shared_ptr<SugaredValue> call(
+      const SourceRange& loc,
+      Function& m,
+      at::ArrayRef<NamedValue> inputs,
+      at::ArrayRef<NamedValue> attributes,
+      size_t n_binders) {
+    return std::make_shared<ExceptionMessageValue>(
+        insertConstant(*m.graph(), message_, loc));
+  }
+
+  std::string message_;
+};
+
 } // namespace script
 } // namespace jit
 } // namespace torch
