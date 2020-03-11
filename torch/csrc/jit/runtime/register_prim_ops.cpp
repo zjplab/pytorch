@@ -3223,7 +3223,7 @@ at::Tensor interpolate(
     }
   } else {
     if (align_corners == c10::nullopt) {
-      AT_WARN(
+      TORCH_WARN(
           "Default upsampling behavior when mode=",
           mode,
           " is changed "
@@ -3261,7 +3261,7 @@ at::Tensor interpolate(
     }
 
     if(warn_recompute_scale_factor) {
-      AT_WARN(
+      TORCH_WARN(
         "The default behavior for interpolate/upsample with float scale_factor will change "
         "in 1.5.0 to align with other frameworks/libraries, and use scale_factor directly, "
         "instead of relying on the computed output size. "
