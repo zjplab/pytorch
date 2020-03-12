@@ -1,6 +1,7 @@
 
 import argparse
 import os
+import re
 
 import yaml
 from collections import defaultdict
@@ -66,6 +67,11 @@ parser.add_argument(
     action='store_true',
     help='force it to generate schema-only registrations for ops that are not'
          'listed on --op_registration_whitelist')
+parser.add_argument(
+    '--disable-autograd',
+    default=False,
+    action='store_true',
+    help='skip generating autograd related code when the flag is set')
 options = parser.parse_args()
 # NB: It is mandatory to NOT use os.path.join here, as the install directory
 # will eventually be ingested by cmake, which does not respect Windows style
@@ -207,6 +213,20 @@ top_env = {
 }
 
 
+# Copied from tools.autograd.gen_python_functions.SKIP_PYTHON_BINDINGS
+BACKWARD_OP_PATTERNS = [
+    '.*_backward',
+    '.*_backward_(out|input|weight|bias)',
+]
+
+
+def is_backward_op(opname):
+    for pattern in BACKWARD_OP_PATTERNS:
+        if re.match('^' + pattern + '$', opname):
+            return True
+    return False
+
+
 def is_whitelisted_backend(backend):
     return options.backend_whitelist is None or backend in options.backend_whitelist
 
@@ -259,6 +279,8 @@ def add_op_registrations(per_type_registrations, per_op_registrations, op_regist
         opname = op_registration.operator_name
         registration = op_registration.registration_code
         # apply whitelist
+        if options.disable_autograd and is_backward_op(opname):
+            continue
         if op_registration_whitelist is not None and opname not in op_registration_whitelist:
             if options.force_schema_registration:
                 registration = op_registration.schema_registration_code

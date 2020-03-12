@@ -157,6 +157,10 @@ if (INTERN_BUILD_ATEN_OPS)
     list(APPEND CUSTOM_BUILD_FLAGS --backend_whitelist CPU QuantizedCPU)
   endif()
 
+  if(INTERN_DISABLE_AUTOGRAD)
+    list(APPEND CUSTOM_BUILD_FLAGS --disable-autograd)
+  endif()
+
   if (SELECTED_OP_LIST)
     if (NOT USE_STATIC_DISPATCH AND NOT OP_DEPENDENCY)
       message(FATAL_ERROR "Must provide op dependency graph .yaml file for custom build with dynamic dispatch!")
