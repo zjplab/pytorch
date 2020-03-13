@@ -1742,6 +1742,58 @@ graph(%packed_params_module, %a, %a_scale, %a_zero_point, %a_dtype, %r_scale, %r
             x = torch.rand(1, 5, 6, 6)
             self.assertEqual(eager(x), scripted(x))
 
+    def test_foldbn_frozen_traced_module(self):
+        # Test that we find Conv-BN patterns in submodules
+        class SubModule(torch.nn.Module):
+            def __init__(self, num_blocks, enable_bias, enable_affine):
+                super(SubModule, self).__init__()
+                layers = []
+                for i in range(num_blocks):
+                    layers.append(torch.nn.Conv2d(20, 20, 5, 1, bias=enable_bias))
+                    bn_obj = torch.nn.BatchNorm2d(num_features=20, affine=enable_affine)
+                    if enable_affine:
+                        bn_obj.weight = torch.nn.Parameter(torch.rand_like(bn_obj.weight))
+                        bn_obj.bias = torch.nn.Parameter(torch.rand_like(bn_obj.bias))
+                    bn_obj.running_mean = torch.rand_like(bn_obj.running_mean)
+                    bn_obj.running_var = torch.rand_like(bn_obj.running_var)
+                    layers.append(bn_obj)
+                self.layers = nn.Sequential(*layers)
+
+            def forward(self, x):
+                return self.layers(x)
+
+        class TestModule(torch.nn.Module):
+            def __init__(self, num_blocks, enable_bias, enable_affine):
+                super(TestModule, self).__init__()
+                self.sub = SubModule(num_blocks, enable_bias, enable_affine)
+
+            def forward(self, x):
+                x = self.sub(x)
+                return x
+
+        bias_affine_options = itertools.product([True], [True], [1, 2])
+        for (enable_bias, enable_bn_affine, num_layers) in bias_affine_options:
+            eager = TestModule(num_layers, enable_bias, enable_bn_affine)
+            eager.eval()
+
+            x = torch.rand(1, 20, 10, 10)
+            traced = torch.jit.trace(eager, x)
+            traced.eval()
+
+            traced_copy = traced.copy()
+            torch._C._jit_pass_inline(traced_copy.graph)
+
+            FileCheck().check_count("aten::batch_norm", num_layers, exactly=True) \
+                .run(traced_copy.graph)
+
+            traced._c = torch._C._freeze_module(traced._c)
+            torch._C._jit_pass_fold_convbn_in_frozen_traced_module_graph(traced.graph)
+
+            FileCheck().check_not("aten::batch_norm").run(traced.graph)
+
+            x = torch.rand(1, 20, 10, 10)
+            self.assertEqual(eager(x), traced(x))
+
     def test_fuse_linear(self):
         input_strs = ["""
 graph(%input, %weight, %bias, %4):
