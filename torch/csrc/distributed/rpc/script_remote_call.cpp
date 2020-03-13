@@ -49,6 +49,7 @@ std::unique_ptr<ScriptRemoteCall> ScriptRemoteCall::fromIValues(
 }
 
 Message ScriptRemoteCall::toMessage() && {
+  JitRRefPickleGuard jitPickleGuard;
   std::vector<IValue> ivalues;
   ScriptCall::toIValues(ivalues);
   ivalues.emplace_back(retRRefId_.toIValue());

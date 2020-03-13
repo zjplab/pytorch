@@ -14,6 +14,7 @@ int64_t CleanupAutogradContextReq::getContextId() {
 }
 
 rpc::Message CleanupAutogradContextReq::toMessage() && {
+  rpc::JitRRefPickleGuard jitPickleGuard;
   // pickle context_id using JIT pickler.
   std::vector<torch::Tensor> tensorTable;
   std::vector<char> payload =

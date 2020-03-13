@@ -19,6 +19,7 @@ PropagateGradientsReq::PropagateGradientsReq(
       retainGraph_(retainGraph) {}
 
 Message PropagateGradientsReq::toMessage() && {
+  rpc::JitRRefPickleGuard jitPickleGuard;
   std::vector<at::IValue> ivalues;
   // Add all the grad tensors.
   for (const auto& grad : grads_) {

@@ -101,6 +101,7 @@ std::unique_ptr<ScriptCall> ScriptCall::fromIValues(
 }
 
 Message ScriptCall::toMessage() && {
+  JitRRefPickleGuard jitPickleGuard;
   std::vector<IValue> ivalues;
   toIValues(ivalues);
 

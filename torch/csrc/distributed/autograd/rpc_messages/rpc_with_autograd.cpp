@@ -50,6 +50,7 @@ RpcWithAutograd::RpcWithAutograd(
 }
 
 Message RpcWithAutograd::toMessage() && {
+  rpc::JitRRefPickleGuard jitPickleGuard;
   auto messageId = wrappedMessage_.id();
   auto messageType = wrappedMessage_.type();
 
