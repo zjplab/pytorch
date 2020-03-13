@@ -14,7 +14,7 @@ namespace impl {
 
 // This is a private class used inside the Dispatcher to represent an operator
 // and its dispatch table. This is not part of the public API.
-class OperatorEntry final {
+class CAFFE2_API OperatorEntry final {
 public:
   struct KernelSchemaPair {
     KernelSchemaPair(KernelFunction k, std::unique_ptr<FunctionSchema> s)
@@ -73,6 +73,8 @@ public:
   // Postcondition: caller is responsible for disposing of the kernel
   std::list<KernelSchemaPair>::iterator registerKernel(c10::optional<DispatchKey> dispatch_key, KernelFunction kernel, std::unique_ptr<FunctionSchema> inferred_function_schema);
   void deregisterKernel_(c10::optional<DispatchKey> dispatch_key, std::list<KernelSchemaPair>::iterator kernel);
+
+  std::string dumpState() const;
 
 private:
 
