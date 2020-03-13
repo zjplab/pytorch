@@ -420,10 +420,6 @@ struct Environment {
     auto retval = findInAnyFrame(ident);
 
     if (!retval) {
-      retval = resolver->resolveValue(ident, method, range);
-    }
-
-    if (!retval) {
       if (auto type = resolver->resolveType(ident, range)) {
         if (auto tuple_type = type->cast<TupleType>()) {
           retval = std::make_shared<NamedTupleConstructor>(tuple_type);
@@ -431,6 +427,10 @@ struct Environment {
           retval = std::make_shared<ClassValue>(class_type);
         }
       }
+    }
+
+    if (!retval) {
+      retval = resolver->resolveValue(ident, method, range);
     }
 
     if (!retval) {
@@ -1758,13 +1758,19 @@ struct to_ir {
   void emitAssert(const Assert& stmt) {
     CondValue cond_value = emitCondExpr(stmt.test());
     List<Stmt> true_branch = List<Stmt>::create(stmt.range(), {});
-    auto message = StringLiteral::create(stmt.range(), "AssertionError");
-    auto callee = Var::create(stmt.range(), Ident::create(stmt.range(), "AssertionError"));
+
+    // Create an `AssertionError("the_message")` call
+    auto message = (stmt.msg().present())
+        ? stmt.msg().get()
+        : StringLiteral::create(stmt.range(), "");
+    auto callee = Var::create(
+        stmt.range(), Ident::create(stmt.range(), "AssertionError"));
     auto apply = Apply::create(
         stmt.range(),
         callee,
         List<Expr>::create(stmt.range(), {message}),
         List<Attribute>::create(stmt.range(), {}));
+
     List<Stmt> false_branch = List<Stmt>::create(
         stmt.range(), {Raise::create(stmt.range(), apply)});
     emitIfElseBlocks(stmt.range(), cond_value, true_branch, false_branch);

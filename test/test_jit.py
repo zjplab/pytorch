@@ -15296,7 +15296,7 @@ a")
         ''')
 
         cu.foo(torch.tensor(1))
-        with self.assertRaisesRegex(torch.jit.Error, "Exception"):
+        with self.assertRaisesRegex(torch.jit.Error, "hi"):
             cu.foo(torch.tensor(0))
 
         @torch.jit.script
@@ -15305,7 +15305,7 @@ a")
 
         foo(torch.tensor(1))
         # we don't currently validate the name of the exception
-        with self.assertRaisesRegex(torch.jit.Error, "Exception"):
+        with self.assertRaisesRegex(torch.jit.Error, "hi"):
             foo(torch.tensor(0))
 
     def test_python_op_exception(self):
