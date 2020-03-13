@@ -420,6 +420,21 @@ struct Environment {
     auto retval = findInAnyFrame(ident);
 
     if (!retval) {
+      retval = resolver->resolveValue(ident, method, range);
+    }
+
+    if (!retval) {
+      if (auto type = resolver->resolveType(ident, range)) {
+        if (auto tuple_type = type->cast<TupleType>()) {
+          retval = std::make_shared<NamedTupleConstructor>(tuple_type);
+        } else if (auto class_type = type->cast<ClassType>()) {
+          retval = std::make_shared<ClassValue>(class_type);
+        }
+      }
+    }
+
+    if (!retval) {
+      // [python globals]
       static std::unordered_map<std::string, SugaredValuePtr> globals = {
           {"print", std::make_shared<PrintValue>()},
           {"tuple", SpecialFormValue::create(prim::TupleConstruct)},
@@ -473,8 +488,9 @@ struct Environment {
           {"ord", std::make_shared<BuiltinFunction>(aten::ord, at::nullopt)},
           {"chr", std::make_shared<BuiltinFunction>(aten::chr, at::nullopt)},
           {"bin", std::make_shared<BuiltinFunction>(aten::bin, at::nullopt)},
-          {"AssertionError", std::make_shared<ExceptionValue>()},
-          {"RuntimeError", std::make_shared<ExceptionValue>()},
+          {"AssertionError",
+           std::make_shared<ExceptionValue>("AssertionError")},
+          {"RuntimeError", std::make_shared<ExceptionValue>("RuntimeError")},
           {"range", SpecialFormValue::create(prim::range)},
           {"zip", SpecialFormValue::create(prim::zip)},
           {"enumerate", SpecialFormValue::create(prim::enumerate)},
@@ -486,26 +502,6 @@ struct Environment {
       auto it = globals.find(ident);
       if (it != globals.end()) {
         retval = it->second;
-      }
-    }
-
-    if (!retval) {
-      if (auto type = resolver->resolveType(ident, range)) {
-        if (auto tuple_type = type->cast<TupleType>()) {
-          retval = std::make_shared<NamedTupleConstructor>(tuple_type);
-        }
-      }
-    }
-
-    if (!retval) {
-      retval = resolver->resolveValue(ident, method, range);
-    }
-
-    if (!retval) {
-      if (auto type = resolver->resolveType(ident, range)) {
-        if (auto class_type = type->cast<ClassType>()) {
-          retval = std::make_shared<ClassValue>(class_type);
-        }
       }
     }
 
@@ -1305,6 +1301,7 @@ struct to_ir {
     }
     // cast value not response for checking output type
     if (!out->type()->isSubtypeOf(BoolType::get())) {
+      std::cout << *graph << "\n";
       throw ErrorReport(loc)
           << "expected a bool expression for condition but found "
           << out->type()->python_str();

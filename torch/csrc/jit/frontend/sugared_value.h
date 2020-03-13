@@ -671,7 +671,7 @@ struct TORCH_API ExceptionMessageValue : public SugaredValue {
 
 
 struct TORCH_API ExceptionValue : public SugaredValue {
-  ExceptionValue() : message_("ExceptionValue") {}
+  ExceptionValue(const std::string& message) : message_(std::move(message)) {}
 
   std::string kind() const override {
     return "exception";
@@ -690,6 +690,5 @@ struct TORCH_API ExceptionValue : public SugaredValue {
   std::string message_;
 };
 
-} // namespace script
 } // namespace jit
 } // namespace torch

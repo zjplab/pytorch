@@ -268,7 +268,9 @@ struct VISIBILITY_HIDDEN PythonClassValue : public ClassValue {
 
 struct VISIBILITY_HIDDEN PythonExceptionValue : public ExceptionValue {
   PythonExceptionValue(const py::object exception_class)
-      : exception_class_(exception_class) {}
+      : ExceptionValue(
+            py::str(py::getattr(exception_class, "__name__", py::str("")))),
+        exception_class_(exception_class) {}
 
   std::string kind() const override {
     return "Python exception";
@@ -284,6 +286,5 @@ struct VISIBILITY_HIDDEN PythonExceptionValue : public ExceptionValue {
   py::object exception_class_;
 };
 
-} // namespace script
 } // namespace jit
 } // namespace torch
