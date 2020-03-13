@@ -149,6 +149,8 @@ compiler_builtins = None
 def _is_global_builtin(maybe_builtin):
     global compiler_builtins
     if compiler_builtins is None:
+        # Errors (AssertionError and RuntimeError) should not be here since
+        # they are handled separately in the compiler
         compiler_builtins = set([
             print,
             tuple,
@@ -173,8 +175,6 @@ def _is_global_builtin(maybe_builtin):
             ord,
             chr,
             bin,
-            AssertionError,
-            RuntimeError,
             range,
             zip,
             enumerate,

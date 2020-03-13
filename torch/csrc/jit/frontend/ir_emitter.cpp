@@ -1301,7 +1301,6 @@ struct to_ir {
     }
     // cast value not response for checking output type
     if (!out->type()->isSubtypeOf(BoolType::get())) {
-      std::cout << *graph << "\n";
       throw ErrorReport(loc)
           << "expected a bool expression for condition but found "
           << out->type()->python_str();
