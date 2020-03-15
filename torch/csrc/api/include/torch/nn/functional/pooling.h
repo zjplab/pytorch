@@ -2,6 +2,7 @@
 
 #include <torch/nn/functional/activation.h>
 #include <torch/nn/options/pooling.h>
+#include <torch/nn/modules/utils.h>
 
 namespace torch {
 namespace nn {
@@ -264,57 +265,71 @@ inline std::tuple<Tensor, Tensor> max_pool3d_with_indices(const Tensor& input, c
 // ============================================================================
 
 namespace detail {
-inline Tensor adaptive_max_pool1d(const Tensor& input,
-  ExpandingArray<1> output_size) {
-   return std::get<0>(torch::adaptive_max_pool1d(input, output_size));
-}
-} // namespace detail
-
-inline Tensor adaptive_max_pool1d(const Tensor& input,
-  const AdaptiveMaxPool1dFuncOptions& options) {
-   return detail::adaptive_max_pool1d(input, options.output_size());
-}
-
-namespace detail {
 inline std::tuple<Tensor, Tensor> adaptive_max_pool1d_with_indices(
-  const Tensor& input, ExpandingArray<1> output_size) {
-   return torch::adaptive_max_pool1d(input, output_size);
+    const Tensor& input, ExpandingArray<1> output_size) {
+  return torch::adaptive_max_pool1d(input, output_size);
 }
 } // namespace detail
 
 inline std::tuple<Tensor, Tensor> adaptive_max_pool1d_with_indices(
-  const Tensor& input, const AdaptiveMaxPool1dFuncOptions& options) {
-   return detail::adaptive_max_pool1d_with_indices(input, options.output_size());
+    const Tensor& input, const AdaptiveMaxPool1dFuncOptions& options) {
+  return detail::adaptive_max_pool1d_with_indices(input, options.output_size());
 }
 
 namespace detail {
-inline Tensor adaptive_max_pool2d(const Tensor& input,
-  ExpandingArray<2> output_size) {
-   return std::get<0>(torch::adaptive_max_pool2d(input, output_size));
+inline Tensor adaptive_max_pool1d(const Tensor& input,
+    ExpandingArray<1> output_size) {
+  return std::get<0>(adaptive_max_pool1d_with_indices(input, output_size));
 }
 } // namespace detail
 
-inline Tensor adaptive_max_pool2d(const Tensor& input,
-  const AdaptiveMaxPool2dFuncOptions& options) {
-   return detail::adaptive_max_pool2d(input, options.output_size());
+inline Tensor adaptive_max_pool1d(const Tensor& input,
+    const AdaptiveMaxPool1dFuncOptions& options) {
+  return detail::adaptive_max_pool1d(input, options.output_size());
 }
 
 namespace detail {
 inline std::tuple<Tensor, Tensor> adaptive_max_pool2d_with_indices(
-  const Tensor& input, ExpandingArray<2> output_size) {
-   return torch::adaptive_max_pool2d(input, output_size);
+    const Tensor& input, ExpandingArrayWithOptionalElem<2> output_size) {
+  auto output_size_ = torch::nn::modules::utils::_list_with_default(output_size, input.sizes());
+  return torch::adaptive_max_pool2d(input, output_size_);
 }
 } // namespace detail
 
 inline std::tuple<Tensor, Tensor> adaptive_max_pool2d_with_indices(
-  const Tensor& input, const AdaptiveMaxPool2dFuncOptions& options) {
-   return detail::adaptive_max_pool2d_with_indices(input, options.output_size());
+    const Tensor& input, const AdaptiveMaxPool2dFuncOptions& options) {
+  return detail::adaptive_max_pool2d_with_indices(input, options.output_size());
+}
+
+namespace detail {
+inline Tensor adaptive_max_pool2d(const Tensor& input,
+    ExpandingArrayWithOptionalElem<2> output_size) {
+  return std::get<0>(adaptive_max_pool2d_with_indices(input, output_size));
+}
+} // namespace detail
+
+inline Tensor adaptive_max_pool2d(const Tensor& input,
+    const AdaptiveMaxPool2dFuncOptions& options) {
+  return detail::adaptive_max_pool2d(input, options.output_size());
+}
+
+namespace detail {
+inline std::tuple<Tensor, Tensor> adaptive_max_pool3d_with_indices(
+    const Tensor& input, ExpandingArrayWithOptionalElem<3> output_size) {
+  auto output_size_ = torch::nn::modules::utils::_list_with_default(output_size, input.sizes());
+  return torch::adaptive_max_pool3d(input, output_size_);
+}
+} // namespace detail
+
+inline std::tuple<Tensor, Tensor> adaptive_max_pool3d_with_indices(
+    const Tensor& input, const AdaptiveMaxPool3dFuncOptions& options) {
+  return detail::adaptive_max_pool3d_with_indices(input, options.output_size());
 }
 
 namespace detail {
 inline Tensor adaptive_max_pool3d(const Tensor& input,
-  ExpandingArray<3> output_size) {
-   return std::get<0>(torch::adaptive_max_pool3d(input, output_size));
+    ExpandingArrayWithOptionalElem<3> output_size) {
+  return std::get<0>(adaptive_max_pool3d_with_indices(input, output_size));
 }
 } // namespace detail
 
@@ -323,54 +338,44 @@ inline Tensor adaptive_max_pool3d(const Tensor& input,
    return detail::adaptive_max_pool3d(input, options.output_size());
 }
 
-namespace detail {
-inline std::tuple<Tensor, Tensor> adaptive_max_pool3d_with_indices(
-  const Tensor& input, ExpandingArray<3> output_size) {
-   return torch::adaptive_max_pool3d(input, output_size);
-}
-} // namespace detail
-
-inline std::tuple<Tensor, Tensor> adaptive_max_pool3d_with_indices(
-  const Tensor& input, const AdaptiveMaxPool3dFuncOptions& options) {
-   return detail::adaptive_max_pool3d_with_indices(input, options.output_size());
-}
-
 // ============================================================================
 
 namespace detail {
 inline Tensor adaptive_avg_pool1d(const Tensor& input,
-  ExpandingArray<1> output_size) {
-   return torch::adaptive_avg_pool1d(input, output_size);
+    ExpandingArray<1> output_size) {
+  return torch::adaptive_avg_pool1d(input, output_size);
 }
 } // namespace detail
 
 inline Tensor adaptive_avg_pool1d(const Tensor& input,
-  const AdaptiveAvgPool1dFuncOptions& options) {
-   return detail::adaptive_avg_pool1d(input, options.output_size());
+    const AdaptiveAvgPool1dFuncOptions& options) {
+  return detail::adaptive_avg_pool1d(input, options.output_size());
 }
 
 namespace detail {
 inline Tensor adaptive_avg_pool2d(const Tensor& input,
-  ExpandingArray<2> output_size) {
-   return torch::adaptive_avg_pool2d(input, output_size);
+    ExpandingArrayWithOptionalElem<2> output_size) {
+  auto output_size_ = torch::nn::modules::utils::_list_with_default(output_size, input.sizes());
+  return torch::adaptive_avg_pool2d(input, output_size_);
 }
 } // namespace detail
 
 inline Tensor adaptive_avg_pool2d(const Tensor& input,
-  const AdaptiveAvgPool2dFuncOptions& options) {
-   return detail::adaptive_avg_pool2d(input, options.output_size());
+    const AdaptiveAvgPool2dFuncOptions& options) {
+  return detail::adaptive_avg_pool2d(input, options.output_size());
 }
 
 namespace detail {
 inline Tensor adaptive_avg_pool3d(const Tensor& input,
-  ExpandingArray<3> output_size) {
-   return torch::adaptive_avg_pool3d(input, output_size);
+    ExpandingArrayWithOptionalElem<3> output_size) {
+  auto output_size_ = torch::nn::modules::utils::_list_with_default(output_size, input.sizes());
+  return torch::adaptive_avg_pool3d(input, output_size_);
 }
 } // namespace detail
 
 inline Tensor adaptive_avg_pool3d(const Tensor& input,
-  const AdaptiveAvgPool3dFuncOptions& options) {
-   return detail::adaptive_avg_pool3d(input, options.output_size());
+    const AdaptiveAvgPool3dFuncOptions& options) {
+  return detail::adaptive_avg_pool3d(input, options.output_size());
 }
 
 // ============================================================================
