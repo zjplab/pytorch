@@ -423,14 +423,20 @@ struct Environment {
       if (auto type = resolver->resolveType(ident, range)) {
         if (auto tuple_type = type->cast<TupleType>()) {
           retval = std::make_shared<NamedTupleConstructor>(tuple_type);
-        } else if (auto class_type = type->cast<ClassType>()) {
-          retval = std::make_shared<ClassValue>(class_type);
         }
       }
     }
 
     if (!retval) {
       retval = resolver->resolveValue(ident, method, range);
+    }
+
+    if (!retval) {
+      if (auto type = resolver->resolveType(ident, range)) {
+        if (auto class_type = type->cast<ClassType>()) {
+          retval = std::make_shared<ClassValue>(class_type);
+        }
+      }
     }
 
     if (!retval) {
