@@ -160,7 +160,7 @@ TEST(CUDAGenerator, TestPhiloxEngineIndex) {
 TEST(CUDAGenerator, TestGeneratorDynamicCast) {
   //  Test Description: Check dynamic cast for CUDA
   if (!at::cuda::is_available()) return;
-  std::shared_ptr<Generator> foo = at::cuda::detail::createCUDAGenerator();
+  auto foo = at::cuda::detail::createCUDAGenerator();
   auto result = dynamic_cast<at::CUDAGenerator*>(foo.get());
   ASSERT_EQ(typeid(at::CUDAGenerator*).hash_code(), typeid(result).hash_code());
 }
@@ -193,14 +193,17 @@ TEST(CUDAGenerator, TestCloning) {
   if (!at::cuda::is_available()) return;
   auto gen1 = at::cuda::detail::createCUDAGenerator();
   gen1->set_current_seed(123); // modify gen1 state
-  gen1->set_philox_offset_per_thread(4);
+  check_generator<CUDAGenerator>(gen1)->set_philox_offset_per_thread(4);
   auto gen2 = at::cuda::detail::createCUDAGenerator();
-  gen2 = gen1->clone();
+  gen2 = Generator(gen1->clone());
   ASSERT_EQ(gen1->current_seed(), gen2->current_seed());
-  ASSERT_EQ(gen1->philox_offset_per_thread(), gen2->philox_offset_per_thread());
+  ASSERT_EQ(
+    check_generator<CUDAGenerator>(gen1)->philox_offset_per_thread(),
+    check_generator<CUDAGenerator>(gen2)->philox_offset_per_thread()
+  );
 }
 
-void thread_func_get_set_current_seed(CUDAGenerator* generator) {
+void thread_func_get_set_current_seed(Generator generator) {
   std::lock_guard<std::mutex> lock(generator->mutex_);
   auto current_seed = generator->current_seed();
   current_seed++;
@@ -233,12 +236,12 @@ TEST(CUDAGenerator, TestRNGForking) {
   auto current_gen = at::cuda::detail::createCUDAGenerator();
   {
     std::lock_guard<std::mutex> lock(default_gen->mutex_);
-    current_gen = default_gen->clone(); // capture the current state of default generator
+    current_gen = Generator(default_gen->clone()); // capture the current state of default generator
   }
   auto target_value = at::randn({1000}, at::kCUDA);
   // Dramatically alter the internal state of the main generator
   auto x = at::randn({100000}, at::kCUDA);
-  auto forked_value = at::randn({1000}, current_gen.get(), at::kCUDA);
+  auto forked_value = at::randn({1000}, current_gen, at::kCUDA);
   ASSERT_EQ(target_value.sum().item<double>(), forked_value.sum().item<double>());
 }
 

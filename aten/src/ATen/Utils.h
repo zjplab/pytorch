@@ -139,32 +139,30 @@ inline int64_t prod_intlist(ArrayRef<int64_t> list) {
 }
 
 /**
+ * Utility function to static cast input Generator* to
+ * the backend generator type (CPU/CUDAGenerator etc.)
+ */
+template <typename T>
+static inline T * check_generator(Generator expr) {
+  if (T::device_type() == expr->device().type()) {
+    return static_cast<T*>(expr.get());
+  }
+  AT_ERROR("Expected a '", T::device_type(), "' device type for generator but found '", expr->device().type(), "'");
+}
+
+/**
  * Utility function used in tensor implementations, which
  * supplies the default generator to tensors, if an input generator
  * is not supplied. The input Generator* is also static casted to
  * the backend generator type (CPU/CUDAGenerator etc.)
  */
 template <typename T>
-static inline T * get_generator_or_default(Generator * expr, Generator * defaultValue) {
-  if (!expr) {
-    expr = defaultValue;
+static inline T* get_generator_or_default(Generator expr, Generator defaultValue) {
+  T* result = expr.defined() ? check_generator<T>(expr) : check_generator<T>(defaultValue);
+  if (result == nullptr) {
+    AT_ERROR("Expected a '", T::device_type(), "' device type for generator but found 'nullptr'");
   }
-  if (T::device_type() == expr->device().type()) {
-    return static_cast<T*>(expr);
-  }
-  AT_ERROR("Expected a '", T::device_type(), "' device type for generator but found '", expr->device().type(), "'");
-}
-
-/**
- * Utility function to static cast input Generator* to
- * the backend generator type (CPU/CUDAGenerator etc.)
- */
-template <typename T>
-static inline T * check_generator(Generator * expr) {
-  if (T::device_type() == expr->device().type()) {
-    return static_cast<T*>(expr);
-  }
-  AT_ERROR("Expected a '", T::device_type(), "' device type for generator but found '", expr->device().type(), "'");
+  return result;
 }
 
 } // at
