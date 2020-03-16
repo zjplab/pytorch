@@ -496,7 +496,6 @@ struct Environment {
           {"bin", std::make_shared<BuiltinFunction>(aten::bin, at::nullopt)},
           {"AssertionError",
            std::make_shared<ExceptionValue>("AssertionError")},
-          {"RuntimeError", std::make_shared<ExceptionValue>("RuntimeError")},
           {"range", SpecialFormValue::create(prim::range)},
           {"zip", SpecialFormValue::create(prim::zip)},
           {"enumerate", SpecialFormValue::create(prim::enumerate)},
