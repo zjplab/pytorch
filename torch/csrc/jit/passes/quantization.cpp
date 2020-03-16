@@ -782,8 +782,10 @@ void InsertObserversHelper::fillPassThroughValueMap(const std::shared_ptr<Graph>
     blocks_to_visit.pop();
     for (Node* n : b->nodes()) {
       auto input_indexes = getGeneralOpTensorInputIndexes(n);
+      GRAPH_DEBUG("input indexes: ", input_indexes.size());
       for (auto i : input_indexes) {
         for (auto* output : n->outputs()) {
+          GRAPH_DEBUG("addding ", output->debugName(), " -> ", n->input(i)->debugName());
           pass_through_value_map_[output].push_back(n->input(i));
         }
       }
@@ -1034,6 +1036,7 @@ InsertObserversHelper::insertObserversFor(
         continue;
       }
       if (n->kind() == prim::CallMethod) {
+        GRAPH_DEBUG("Inserting observers for:", *n);
         auto m = getInvokedModule(module, n, self);
         std::unordered_set<Value*> callee_observed_inputs;
         for (auto i = 0; i < n->inputs().size(); ++i) {
@@ -1066,6 +1069,7 @@ InsertObserversHelper::insertObserversFor(
           }
         }
       } else if (n->kind() == prim::If) {
+        GRAPH_DEBUG("Inserting observers for:", *n);
         std::vector<size_t> aggregated_observed_outputs;
         std::vector<c10::optional<script::Module>> aggregated_output_observers;
         for (Block* subblock : n->blocks()) {
@@ -1144,6 +1148,8 @@ InsertObserversHelper::insertObserversFor(
 void InsertObserversHelper::propagateObservedProperty(
     Value* output, std::unordered_set<Value*>& block_observed_values) {
   if (pass_through_value_map_.count(output)) {
+    GRAPH_DEBUG("found pass thorugh value:", output->debugName());
+    GRAPH_DUMP("in graph: ", output->owningGraph());
     // since the vector is always non-empty, we will
     // not return the initial value
     bool all_observed = true;
@@ -1151,6 +1157,8 @@ void InsertObserversHelper::propagateObservedProperty(
       all_observed &= observed_values_.count(v) || block_observed_values.count(v);
     }
     if (all_observed) {
+      GRAPH_DEBUG("passing observed property to:", output->debugName());
+      GRAPH_DUMP("in graph: ", output->owningGraph());
       // This is to propagate observed property through
       // all ops that doesn't require observation
       block_observed_values.insert(output);
@@ -1174,6 +1182,7 @@ void insertDeQuantCall(Graph* graph,
         original_val->debugName() + ".dequant." + c10::guts::to_string(i))
       ->setType(original_val->type());
     user->replaceInputWith(original_val, dequant->output());
+    GRAPH_DEBUG("insert dequant call for use:", *user);
     graph->insertNode(dequant);
   }
 }
@@ -2143,6 +2152,8 @@ void ReplicateDeQuant(std::shared_ptr<Graph>& graph) {
     for (Node* n : b->nodes()) {
       if (n->kind() == Symbol::aten("dequantize") &&
           n->output()->uses().size() > 1) {
+        GRAPH_DEBUG("dequant node ", *n, "has ",
+                    n->output()->uses().size(), " uses");
         dequant_nodes_to_rewrite.push_back(n);
       }
       for (Block* subblock : n->blocks()) {
@@ -2156,6 +2167,7 @@ void ReplicateDeQuant(std::shared_ptr<Graph>& graph) {
     // copy uses to vector since value->uses() is a reference
     // and changing the graph will also change the uses() list
     std::vector<Use> uses = dequantized_val->uses();
+    GRAPH_DEBUG("insert dequant call for node:", *n);
     insertDeQuantCall(graph.get(), quantized_val, dequantized_val, uses);
   }
 
@@ -2491,17 +2503,22 @@ void DedupModuleUses(Module& module) {
 }
 
 script::Module Finalize(script::Module& module) {
+  GRAPH_DEBUG("In Finalize");
   SwapFunctionalLinear(module);
   auto graph = module.get_method("forward").graph();
   Inline(*graph);
+  GRAPH_DUMP("After inline:", graph);
   ConstantPropagation(graph);
   ReplicateQuant(graph);
+  GRAPH_DUMP("After replicate quant:", graph);
   ReplicateDeQuant(graph);
   SwapDeQuant(graph);
   InsertPrepackUnpack(graph);
   ConstantPropagation(graph);
   QuantFusion(graph);
-  return freeze_module(module);
+  GRAPH_DUMP("After quant fusion:", graph);
+  //return freeze_module(module);
+  return module;
 }
 
 } // namespace jit
