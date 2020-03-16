@@ -1981,6 +1981,7 @@ graph(%input, %weight):
                 super(M, self).__init__()
                 self.maxpool = torch.nn.MaxPool2d(kernel_size=3)
                 self.adaptive_avgpool = torch.nn.AdaptiveAvgPool2d((1, 1))
+                self.dropout = torch.nn.Dropout()
                 self.avgpool = torch.nn.AvgPool2d(3)
 
             def forward(self, x):
@@ -1992,6 +1993,8 @@ graph(%input, %weight):
                 x = torch.max(x)
                 x = torch.min(x)
                 x = torch.mean(x)
+                x = F.dropout(x)
+                x = self.dropout(x)
                 # TODO: uncomment when sort is supported
                 # x, _ = torch.sort(x)
                 x = F.interpolate(x, 4, mode='nearest')
@@ -1999,6 +2002,7 @@ graph(%input, %weight):
                 x = F.upsample_bilinear(x, (32, 32))
                 x = F.upsample_nearest(x, (32, 32))
                 return x
+
         m = torch.jit.script(M())
         torch._C._jit_pass_inline(m.graph)
         FileCheck().check("aten::dequantize") \
@@ -2009,6 +2013,8 @@ graph(%input, %weight):
                    .check("aten::max") \
                    .check("aten::min") \
                    .check("aten::mean") \
+                   .check("aten::dropout") \
+                   .check("aten::dropout") \
                    .run(m.graph)
         torch._C._jit_pass_swap_dequantize(m.graph)
         FileCheck().check("aten::max_pool2d") \
@@ -2018,6 +2024,8 @@ graph(%input, %weight):
                    .check("aten::max") \
                    .check("aten::min") \
                    .check("aten::mean") \
+                   .check("aten::dropout") \
+                   .check("aten::dropout") \
                    .check("dequantize") \
                    .run(m.graph)
 
