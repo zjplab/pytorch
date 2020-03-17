@@ -15,13 +15,12 @@ using torch::autograd::Engine;
 using torch::autograd::FutureVariableList;
 using torch::autograd::GraphRoot;
 using torch::autograd::GraphTask;
+using torch::autograd::ReadyQueue;
 using torch::autograd::Node;
 using torch::autograd::validate_outputs;
 using torch::autograd::variable_list;
 
 static constexpr char* kNumBackwardPasses = "num_current_backward_passes";
-static constexpr char* kEngineCPUQueueSize =
-    "local_autograd_engine_cpu_queue_size";
 static constexpr char* kNumAutogradContexts = "num_autograd_contexts";
 
 DistEngine::DistEngine()
@@ -73,12 +72,20 @@ void DistEngine::computeDependencies(
     bool retainGraph) {
   TORCH_INTERNAL_ASSERT(graphRoot, "graphRoot is null!");
 
+  // Build a CPU ready queue that is used by the graphTask in local
+  // autograd engine, since Distributed Autograd Engine calls
+  // Engine::execute_with_graph_task instead of Engine::execute, we
+  // need to allocate our own CPU ReadyQueue for the GraphTask.
+  auto cpu_ready_queue = engine_.init_local_ready_queue();
+
   // Build the graph task and graph root.
   auto graphTask = std::make_shared<GraphTask>(
       /* keep_graph */ retainGraph,
       /* create_graph */ false,
       /* depth */ 0,
+      /* cpu_ready_queue */ cpu_ready_queue,
       /* exit_on_error */ true);
+
 
   // Run BFS to traverse the graph locally. The roots of the graph are
   // GraphRoot and all send functions for this autograd context.
@@ -188,8 +195,7 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::runEngineAndAccumulateGradients(
   // passes ran into errors.
   autogradContext->clearOutstandingRpcs();
 
-  auto futureGrads = engine_.execute_with_graph_task(
-      autogradContext->retrieveGraphTask(), graphRoot);
+  auto futureGrads = engine_.execute_with_graph_task(autogradContext->retrieveGraphTask(), graphRoot, /*async_mode=*/true);
 
   // Build a future that waits for the callbacks to execute (since callbacks
   // execute after the original future is completed). This ensures we return a
@@ -254,6 +260,7 @@ std::shared_ptr<rpc::FutureMessage> DistEngine::executeSendFunctionAsync(
     // Mark the autograd context id as initialized and unlock.
     initializedContextIds_.insert(autogradContext->contextId());
     lock.unlock();
+
 
     // Enqueue the current send function.
     auto graphTask = autogradContext->retrieveGraphTask();
@@ -388,9 +395,17 @@ size_t DistEngine::numBackwardPasses() const {
 
 std::unordered_map<std::string, std::string> DistEngine::getDebugInfo() const {
   std::unordered_map<std::string, std::string> debugInfo;
+  auto& DistAutogradContainer = DistAutogradContainer::getInstance();
   debugInfo[kNumBackwardPasses] = std::to_string(numBackwardPasses());
-  debugInfo[kEngineCPUQueueSize] =
-      std::to_string(engine_.ready_queue_size(at::kCPU));
+  // fill in all cpu queue size information for each graph task of the context_id
+  // in initializedContextIds_
+  std::lock_guard<std::mutex> guard(initializedContextIdsLock_);
+  for(auto context_id : initializedContextIds_) {
+    std::shared_ptr<torch::autograd::GraphTask> graph_task = DistAutogradContainer.retrieveContext(context_id)->retrieveGraphTask();
+    std::string kGraphTaskCPUQueueSize = "context_id: "  + std::to_string(context_id) + " graph_task_cpu_queue_size";
+    debugInfo[kGraphTaskCPUQueueSize] =
+        std::to_string(engine_.ready_queue_size(graph_task, at::kCPU));
+  }
   debugInfo[kNumAutogradContexts] = std::to_string(
       DistAutogradContainer::getInstance().numAutogradContexts());
   return debugInfo;
